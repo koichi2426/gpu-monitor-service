@@ -30,7 +30,7 @@ HTTP APIとして提供するC++サービスを構築します。
 
 ```bash
 # 1. プロジェクトルートを定義 (Linuxネイティブ領域)
-export PROJECT_ROOT="/home/satoy/gpu-monitor-service" 
+export PROJECT_ROOT="/home/satoy/gpu-monitor"
 
 # 2. 作業用ディレクトリを作成
 cd ~
