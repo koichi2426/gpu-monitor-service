@@ -132,6 +132,9 @@ satoy ALL=(ALL) NOPASSWD: ALL
 # 定義を再読み込み
 sudo systemctl daemon-reload
 
+# サービスが既に起動している場合は停止させる
+sudo systemctl stop gpu-monitor.service 
+
 # 有効化＆起動
 sudo systemctl enable --now gpu-monitor.service
 
