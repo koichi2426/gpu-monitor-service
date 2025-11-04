@@ -29,17 +29,17 @@ HTTP APIとして提供するC++サービスを構築します。
 まずは、WSL上でプロジェクトを配置するフォルダを作成します。
 
 ```bash
-# 1. プロジェクトルートを定義 (Linuxネイティブ領域)
-export PROJECT_ROOT="/home/satoy/gpu-monitor"
+# 1. プロジェクトルートを定義
+export PROJECT_ROOT="/home/satoy/gpu-monitor" 
 
-# 2. 作業用ディレクトリを作成
-cd ~
-mkdir -p $PROJECT_ROOT/build/release
-
-echo "✅ プロジェクトフォルダが $PROJECT_ROOT に設定されました。"
-
-# 3. Gitリポジトリをクローン（ソースコードを取得）
+# 2. Gitリポジトリをクローン（Gitがフォルダを自動作成する）
 git clone https://github.com/koichi2426/gpu-monitor-service.git $PROJECT_ROOT
+
+echo "✅ プロジェクトフォルダが $PROJECT_ROOT に設定され、ソースコードを取得しました。"
+
+# 3. ビルドに必要なフォルダを手動で作成
+cd $PROJECT_ROOT
+mkdir -p build/release
 ```
 
 > 💡 `$PROJECT_ROOT` にすべてのソース (`src/gpu_monitor.cpp`, `CMakeLists.txt` など) が存在する前提です。
