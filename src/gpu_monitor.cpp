@@ -3,7 +3,7 @@
 #include <sstream>
 #include <vector>
 #include <chrono>
-#include <iomanip>
+#include <iomanip> 
 #include <stdexcept>
 #include <thread>
 
@@ -52,9 +52,15 @@ json::object get_gpu_power_data() {
         // GPUデバイス取得
         check_nvml(nvmlDeviceGetHandleByIndex(DEFAULT_GPU_INDEX, &device), "Failed to get device handle");
 
-        // 時刻（ms単位UNIX time）
-        auto now = std::chrono::time_point_cast<std::chrono::milliseconds>(std::chrono::system_clock::now());
-        long long timestamp_ms = now.time_since_epoch().count();
+        // 🚨 修正: 時刻の取得をナノ秒単位に変換し、文字列として取得
+        auto get_time_ns_str = []() -> std::string {
+            auto now = std::chrono::time_point_cast<std::chrono::nanoseconds>(
+                std::chrono::system_clock::now()
+            );
+            return std::to_string(now.time_since_epoch().count());
+        };
+
+        std::string timestamp_ns_str = get_time_ns_str();
 
         // 電力取得
         check_nvml(nvmlDeviceGetPowerUsage(device, &power_mW), "Failed to get power usage");
@@ -62,13 +68,13 @@ json::object get_gpu_power_data() {
 
         // JSON構築
         std::stringstream ss;
-        ss << std::fixed << std::setprecision(3) << power_watts;
+        ss << std::fixed << std::setprecision(6) << power_watts; 
 
         data = {
             {"status", "ok"},
             {"gpu_index", DEFAULT_GPU_INDEX},
             {"power_watts", ss.str()},
-            {"timestamp_ms", timestamp_ms}
+            {"timestamp_ns", timestamp_ns_str}
         };
     } catch (const std::exception& e) {
         data = {{"status", "error"}, {"message", e.what()}};
