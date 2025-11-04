@@ -1,90 +1,96 @@
-# 【WSL2最終版】C++ GPU電力監視API導入ガイド (Port 9001)
+# 【最終決定版】WSL C++ GPU電力監視API導入ガイド（独立プロジェクト）
 
-本記事では、**C++でNVMLを直接利用してGPU電力情報を取得する独立APIサーバー**を構築する手順を紹介します。
-既存プロジェクトとは切り離された、**軽量かつシンプルな最終版セットアップガイド**です。
-
----
-
-## 0. プロジェクト概要
-
-このガイドでは、NVIDIAの **NVML (NVIDIA Management Library)** をC++から直接呼び出し、GPU電力や温度、使用率などをリアルタイムで取得します。
-
-| 項目                    | 内容                    |
-| --------------------- | --------------------- |
-| **プロジェクト名**           | `gpu-monitor-service` |
-| **APIポート (内部)**       | `9001`                |
-| **外部公開ポート (Nginx経由)** | `1721`                |
-| **ユーザー**              | `satoy`（WSLユーザー）      |
+GPU電力監視を高速・軽量に行いたいエンジニアのための、
+**NVMLベース C++ APIサービス構築ガイドの最終決定版** です。
+既存のリポジトリに含まれるソースコードを利用して、
+`systemd` + `Nginx` + `NVML` による **常時稼働型 GPUモニターAPI** を立ち上げます。
 
 ---
 
-## 1. システム準備
+## 0. プロジェクトの定義と前提
 
-### 1-1. プロジェクトフォルダ作成とクローン
+このガイドでは、**既存のGitリポジトリに含まれるコード**を使用します。
+GPUの消費電力をNVML（NVIDIA Management Library）から取得し、
+HTTP APIとして提供するC++サービスを構築します。
+
+| 項目             | 内容                                        |
+| -------------- | ----------------------------------------- |
+| **プロジェクト名**    | `gpu-monitor-service`                     |
+| **APIポート（内部）** | `9001`                                    |
+| **WSLユーザー**    | `satoy`                                   |
+| **対象環境**       | Ubuntu on WSL2 + NVIDIA GPU (CUDA 12.4対応) |
+
+---
+
+## 1. 環境セットアップとファイルの取得
+
+### 1-1. プロジェクトフォルダの作成とGitクローン
+
+まずは、WSL上でプロジェクトを配置するフォルダを作成します。
 
 ```bash
-# プロジェクトルートを定義
-export PROJECT_ROOT="/home/satoy/gpu-monitor-service"
+# 1. プロジェクトルートを定義 (Linuxネイティブ領域)
+export PROJECT_ROOT="/home/satoy/gpu-monitor-service" 
 
-# ディレクトリ作成
-mkdir -p $PROJECT_ROOT/src
+# 2. 作業用ディレクトリを作成
+cd ~
 mkdir -p $PROJECT_ROOT/build/release
 
-# ソース取得
+echo "✅ プロジェクトフォルダが $PROJECT_ROOT に設定されました。"
+
+# 3. Gitリポジトリをクローン（ソースコードを取得）
 git clone https://github.com/koichi2426/gpu-monitor-service.git $PROJECT_ROOT
 ```
 
+> 💡 `$PROJECT_ROOT` にすべてのソース (`src/gpu_monitor.cpp`, `CMakeLists.txt` など) が存在する前提です。
+
 ---
 
-### 1-2. 依存パッケージのインストール
+### 1-2. システム依存関係のインストール
+
+次に、C++ビルド環境とNVMLライブラリを整えます。
 
 ```bash
+# C++ビルドツール、CMake、Boost、Nginx、Luaモジュールをインストール
 sudo apt update
 sudo apt install -y build-essential cmake libboost-all-dev nginx-extras libnginx-mod-http-lua
+
+# NVML (NVIDIA Management Library) の依存関係をインストール
 sudo apt install -y cuda-compiler-12-4 libnvidia-compute-535 libnvidia-extra-535 libnvidia-ml-dev
 ```
 
-※ `libnvidia-ml-dev` に NVML ライブラリが含まれます。
-
 ---
 
-## 2. C++ソース構成
+## 2. C++バイナリのビルドと権限設定
 
-### 2-1. `src/gpu_monitor.cpp`
-
-GPU電力・温度・使用率を取得し、JSON形式で返すHTTPサーバーを実装。
-（ソースは `git clone` に含まれています）
-
-### 2-2. `CMakeLists.txt`
-
-NVMLライブラリとBoost.Asioをリンクする設定。
-
----
-
-## 3. ビルドと実行権限
+ここでは、`gpu_monitor.cpp` からCMakeを使ってバイナリを生成します。
 
 ```bash
+# 1. ビルドディレクトリへ移動
 cd $PROJECT_ROOT/build/release
+
+# 2. CMake構成を生成
 cmake -DCMAKE_BUILD_TYPE=Release -S $PROJECT_ROOT -B .
+
+# 3. 並列コンパイル
 make -j$(nproc)
+
+# 4. 実行権限を付与 (status=203/EXECエラー対策)
 sudo chmod +x ./gpu_monitor
 ```
 
 ---
 
-## 4. systemdサービス化
+## 3. systemd サービスの設定と起動
 
-### 4-1. sudo権限の自動化
+GPUモニターを自動起動させるため、`systemd`サービスを設定します。
 
-```bash
-sudo visudo -f /etc/sudoers.d/010_gpu_monitor_nopasswd
-# 以下を追記
-satoy ALL=(ALL) NOPASSWD: ALL
-```
+---
 
-### 4-2. サービス定義と起動
+### 3-1. サービス定義ファイルの作成
 
 ```bash
+# 1. サービス定義を /etc/systemd/system に配置
 sudo tee /etc/systemd/system/gpu-monitor.service > /dev/null <<EOL
 [Unit]
 Description=NVIDIA GPU Power Monitoring API (Port 9001)
@@ -101,22 +107,54 @@ StandardError=journal
 [Install]
 WantedBy=multi-user.target
 EOL
-
-sudo systemctl daemon-reload
-sudo systemctl enable --now gpu-monitor.service
 ```
 
 ---
 
-## 5. Nginxリバースプロキシ設定
+### 3-2. サービス実行権限の付与
 
-### 5-1. 設定追加
+```bash
+# visudo設定ファイルを作成
+sudo visudo -f /etc/sudoers.d/010_gpu_monitor_nopasswd
+```
+
+開いたエディタに以下を **そのまま** 貼り付け、保存して終了します。
+
+```
+satoy ALL=(ALL) NOPASSWD: ALL
+```
+
+---
+
+### 3-3. サービス起動と確認
+
+```bash
+# 定義を再読み込み
+sudo systemctl daemon-reload
+
+# 有効化＆起動
+sudo systemctl enable --now gpu-monitor.service
+
+# 状態確認 (Active: active (running) であることを確認)
+sudo systemctl status gpu-monitor.service
+```
+
+---
+
+## 4. Nginx リバースプロキシ設定の統合
+
+外部アクセスを許可するため、
+外部ポート **1721** → 内部APIポート **9001** の転送を設定します。
+
+---
+
+### 4-1. 設定ファイルの編集
 
 ```bash
 sudo vim /etc/nginx/sites-available/agenthub_proxy
 ```
 
-`server { ... }` 内に以下を追記：
+既存の `server { ... }` ブロックの中に、次のブロックを追加します：
 
 ```nginx
 location = /gpu/power {
@@ -126,41 +164,58 @@ location = /gpu/power {
 }
 ```
 
-### 5-2. Nginx再起動
+---
+
+### 4-2. Nginxの反映
 
 ```bash
 sudo nginx -t
 sudo systemctl restart nginx
 ```
 
+設定にエラーがなければ、これで外部からアクセスできるようになります。
+
 ---
 
 ## ✅ 最終テスト
 
-外部のPCから、GPU電力情報APIを叩いて応答を確認します。
+最後に、外部PCからAPIレスポンスを確認しましょう。
 
 ```bash
-# 外部PCから実行
-curl http://<あなたのグローバルIP>:1721/gpu/power
+# 外部PC（koichi@koxoなど）から実行
+# ※IPはあなたのグローバルIPに置き換えてください
+curl http://118.9.7.134:1721/gpu/power
 ```
 
-正常であれば、以下のようなJSONが返ります：
+成功すれば、以下のようなJSONレスポンスが返ります：
 
 ```json
 {
-  "power_watts": 68.25,
-  "temperature_c": 57,
-  "gpu_utilization": 42
+  "gpu_id": 0,
+  "name": "NVIDIA GeForce RTX 4060 Laptop GPU",
+  "power_watts": 42.75,
+  "temperature_celsius": 51,
+  "memory_usage_mb": 2304
 }
 ```
 
 ---
 
-## まとめ
+## 🎯 まとめ
 
-これで、WSL2上に**独立したGPU電力監視APIサービス**が構築されました。
-Nginx経由で安全に公開でき、他のシステムからも軽量にGPU情報を取得できます。
+| ステップ | 内容                  |
+| ---- | ------------------- |
+| 1    | リポジトリクローンと依存インストール  |
+| 2    | CMakeでビルド・実行権限付与    |
+| 3    | systemdサービス構築・起動確認  |
+| 4    | Nginxで外部公開（ポート1721） |
+| ✅    | 外部PCから`curl`で確認！    |
 
 ---
 
-（完）
+これで、
+**NVMLベースのGPU電力監視API** が
+**WSL上で常時稼働・外部公開** されました。
+
+> ⚙️ この構成は **AgentHub Engine** や **FloraGraph** など、他プロジェクトからも
+> 安全に利用できる「独立GPUモニター」として設計されています。
