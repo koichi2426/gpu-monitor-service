@@ -38,7 +38,6 @@ target_link_libraries(gpu_monitor PRIVATE
 
 ### 2. CMakeLists.txt (後半: 設定とリンク)
 
-```cmake
 # --- 出力先設定 ---
 set_target_properties(gpu_monitor PROPERTIES 
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
