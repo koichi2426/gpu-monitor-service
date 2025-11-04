@@ -1,4 +1,4 @@
-# 【最終決定版】WSL C++ GPU電力監視API導入ガイド（独立プロジェクト）
+# WSL C++ GPU電力監視API導入ガイド
 
 GPU電力監視を高速・軽量に行いたいエンジニアのための、
 **NVMLベース C++ APIサービス構築ガイドの最終決定版** です。
@@ -175,50 +175,3 @@ location = /gpu/power {
 sudo nginx -t
 sudo systemctl restart nginx
 ```
-
-設定にエラーがなければ、これで外部からアクセスできるようになります。
-
----
-
-## ✅ 最終テスト
-
-最後に、外部PCからAPIレスポンスを確認しましょう。
-
-```bash
-# 外部PC（koichi@koxoなど）から実行
-# ※IPはあなたのグローバルIPに置き換えてください
-curl http://118.9.7.134:1721/gpu/power
-```
-
-成功すれば、以下のようなJSONレスポンスが返ります：
-
-```json
-{
-  "gpu_id": 0,
-  "name": "NVIDIA GeForce RTX 4060 Laptop GPU",
-  "power_watts": 42.75,
-  "temperature_celsius": 51,
-  "memory_usage_mb": 2304
-}
-```
-
----
-
-## 🎯 まとめ
-
-| ステップ | 内容                  |
-| ---- | ------------------- |
-| 1    | リポジトリクローンと依存インストール  |
-| 2    | CMakeでビルド・実行権限付与    |
-| 3    | systemdサービス構築・起動確認  |
-| 4    | Nginxで外部公開（ポート1721） |
-| ✅    | 外部PCから`curl`で確認！    |
-
----
-
-これで、
-**NVMLベースのGPU電力監視API** が
-**WSL上で常時稼働・外部公開** されました。
-
-> ⚙️ この構成は **AgentHub Engine** や **FloraGraph** など、他プロジェクトからも
-> 安全に利用できる「独立GPUモニター」として設計されています。
