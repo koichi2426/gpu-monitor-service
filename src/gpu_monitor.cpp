@@ -3,13 +3,14 @@
 #include <sstream>
 #include <vector>
 #include <chrono>
-#include <iomanip> 
-#include <stdexcept> 
+#include <iomanip>
+#include <stdexcept>
+#include <thread>
 
-// NVIDIA Management Library (NVML) Headers
+// --- NVIDIA Management Library (NVML) ---
 #include <nvml.h>
 
-// Boost Headers (ASIO/Beast for networking, JSON for data formatting)
+// --- Boost (Beast, JSON, ASIO) ---
 #include <boost/beast.hpp>
 #include <boost/json.hpp>
 #include <boost/asio.hpp>
@@ -19,164 +20,137 @@ namespace json = boost::json;
 namespace net  = boost::asio;
 using tcp = net::ip::tcp;
 
-// --- 1. 定数とグローバル状態 ---
-const int DEFAULT_GPU_INDEX = 0; // 監視対象のGPUインデックス (通常は0)
+// =============================
+// 1. 定数とNVML初期化ヘルパー
+// =============================
 
-// --- 2. NVMLヘルパー関数 ---
+constexpr int DEFAULT_GPU_INDEX = 0;
 
-// NVMLエラーチェックと例外スロー
-void check_nvml_error(nvmlReturn_t result, const std::string& message) {
+// NVMLのエラーチェック
+void check_nvml(nvmlReturn_t result, const std::string& msg) {
     if (result != NVML_SUCCESS) {
-        std::string error_str = "NVML Error: " + message + " (" + nvmlErrorString(result) + ")";
-        throw std::runtime_error(error_str);
+        throw std::runtime_error(msg + ": " + std::string(nvmlErrorString(result)));
     }
 }
 
-// GPUの電力と時刻を取得するコア関数
+// =============================
+// 2. GPU電力データ取得関数
+// =============================
 json::object get_gpu_power_data() {
     nvmlReturn_t result;
     nvmlDevice_t device;
-    unsigned int power_mW; 
-    
-    // --- 1. NVMLの初期化 ---
+    unsigned int power_mW = 0;
+
     result = nvmlInit();
     if (result != NVML_SUCCESS) {
-        // 初期化失敗の場合は、そのままエラーを返す
-        return json::object{
-            {"status", "error"},
-            {"message", "NVML initialization failed: " + std::string(nvmlErrorString(result))}
-        };
+        return {{"status", "error"}, {"message", "NVML init failed: " + std::string(nvmlErrorString(result))}};
     }
-    
-    try {
-        // --- 2. GPUデバイスの取得 ---
-        result = nvmlDeviceGetHandleByIndex(DEFAULT_GPU_INDEX, &device);
-        check_nvml_error(result, "Failed to get device handle");
 
-        // --- 3. 時刻の取得 (ミリ秒UNIXタイムスタンプ) ---
-        auto now = std::chrono::time_point_cast<std::chrono::milliseconds>(
-            std::chrono::system_clock::now()
-        );
+    json::object data;
+
+    try {
+        // GPUデバイス取得
+        check_nvml(nvmlDeviceGetHandleByIndex(DEFAULT_GPU_INDEX, &device), "Failed to get device handle");
+
+        // 時刻（ms単位UNIX time）
+        auto now = std::chrono::time_point_cast<std::chrono::milliseconds>(std::chrono::system_clock::now());
         long long timestamp_ms = now.time_since_epoch().count();
 
-        // --- 4. 電力情報の取得 (ミリワット単位) ---
-        result = nvmlDeviceGetPowerUsage(device, &power_mW); 
-        check_nvml_error(result, "Failed to get power usage");
+        // 電力取得
+        check_nvml(nvmlDeviceGetPowerUsage(device, &power_mW), "Failed to get power usage");
+        double power_watts = static_cast<double>(power_mW) / 1000.0;
 
-        // --- 5. 値の整形 (ワット単位に変換し、精度を確保) ---
-        // 0.001W精度を満たすため、小数点以下6桁で表示
-        double power_watts = static_cast<double>(power_mW) / 1000.0; 
-        
+        // JSON構築
         std::stringstream ss;
-        ss << std::fixed << std::setprecision(6) << power_watts;
+        ss << std::fixed << std::setprecision(3) << power_watts;
 
-        // --- 6. JSONレスポンス構築 ---
-        return json::object{
+        data = {
             {"status", "ok"},
             {"gpu_index", DEFAULT_GPU_INDEX},
             {"power_watts", ss.str()},
             {"timestamp_ms", timestamp_ms}
         };
-
-    } catch (const std::runtime_error& e) {
-        // NVML操作中のエラー
-        return json::object{
-            {"status", "error"},
-            {"message", e.what()}
-        };
+    } catch (const std::exception& e) {
+        data = {{"status", "error"}, {"message", e.what()}};
     }
-    
-    // --- 7. NVMLの終了処理 ---
+
     nvmlShutdown();
-    return json::object{};
+    return data;
 }
 
-
-// --- 3. HTTPセッションハンドラ ---
-http::response<http::string_body> handle_power_request() {
-    json::object data = get_gpu_power_data();
-    
+// =============================
+// 3. HTTPリクエストハンドラ
+// =============================
+http::response<http::string_body> handle_request(const http::request<http::string_body>& req) {
     http::response<http::string_body> res;
+    res.set(http::field::server, "gpu-monitor/1.0");
     res.set(http::field::content_type, "application/json");
 
-    if (data.at("status").as_string() == "error") {
-        res.result(http::status::internal_server_error);
-    } else {
-        res.result(http::status::ok);
+    if (req.method() != http::verb::get) {
+        res.result(http::status::method_not_allowed);
+        res.body() = R"({"error":"Method Not Allowed"})";
+        res.prepare_payload();
+        return res;
     }
 
-    res.body() = json::serialize(data);
+    if (req.target() == "/health") {
+        res.result(http::status::ok);
+        res.body() = R"({"status":"healthy"})";
+    } else if (req.target() == "/gpu/power") {
+        auto json_data = get_gpu_power_data();
+        res.result(json_data.at("status").as_string() == "ok"
+                   ? http::status::ok
+                   : http::status::internal_server_error);
+        res.body() = json::serialize(json_data);
+    } else {
+        res.result(http::status::not_found);
+        res.body() = R"({"error":"Not Found"})";
+    }
+
     res.prepare_payload();
     return res;
 }
 
-// HTTPリクエストを処理する関数
+// =============================
+// 4. クライアントセッション
+// =============================
 void do_session(tcp::socket socket) {
     boost::beast::flat_buffer buffer;
-    
+
     try {
         http::request<http::string_body> req;
-        http::read(socket, buffer, req); 
-        
-        http::response<http::string_body> res;
-        
-        if (req.method() == http::verb::get) {
-            
-            if (req.target() == "/health") {
-                res.result(http::status::ok);
-                res.body() = "OK";
-            } else if (req.target() == "/gpu/power") {
-                res = handle_power_request();
-            } else {
-                res.result(http::status::not_found);
-                res.body() = "404 Not Found";
-            }
-        } else {
-            res.result(http::status::method_not_allowed);
-            res.body() = "Method Not Allowed";
-        }
+        http::read(socket, buffer, req);
 
-        res.set(http::field::server, "GPU-Monitor/1.0");
-        res.prepare_payload();
-        http::write(socket, res); 
-
-    } catch (const boost::system::system_error& se) {
-        if (se.code() != http::error::end_of_stream) {
-            std::cerr << "Server Session Error: " << se.what() << "\n";
-        }
+        auto res = handle_request(req);
+        http::write(socket, res);
     } catch (const std::exception& e) {
-        std::cerr << "General Error: " << e.what() << "\n";
+        std::cerr << "[Session Error] " << e.what() << std::endl;
     }
 }
 
-
-// --- 4. メインサーバーループ ---
+// =============================
+// 5. メインサーバーループ
+// =============================
 int main(int argc, char* argv[]) {
-    int port = 9001; // デフォルトポートは9001
-
+    int port = 9001;
     if (argc == 2) {
-        try {
-            port = std::stoi(argv[1]);
-        } catch (const std::exception& e) {
-            std::cerr << "Invalid port argument. Using default port 9001.\n";
-        }
+        try { port = std::stoi(argv[1]); }
+        catch (...) { std::cerr << "Invalid port argument, using default 9001\n"; }
     }
-    
+
     try {
         net::io_context ioc{1};
         tcp::acceptor acceptor{ioc, {tcp::v4(), static_cast<unsigned short>(port)}};
-        
-        std::cout << "[INFO] GPU Power Monitor Server listening on port " << port << "\n";
+
+        std::cout << "[INFO] GPU Power Monitor running on port " << port << std::endl;
 
         while (true) {
             tcp::socket socket{ioc};
             acceptor.accept(socket);
-            
-            // クライアント接続を新しいスレッドで処理
             std::thread{do_session, std::move(socket)}.detach();
         }
     } catch (const std::exception& e) {
-        std::cerr << "Server Initialization Error: " << e.what() << "\n";
+        std::cerr << "[Fatal] " << e.what() << std::endl;
         return 1;
     }
     return 0;
